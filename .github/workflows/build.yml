@@ -27,12 +27,24 @@ jobs:
       - name: Update ufbt SDK
         run: ufbt update
 
+      - name: Find application.fam directory
+        id: find_app
+        run: |
+          APP_DIR=$(dirname "$(find . -maxdepth 3 -name 'application.fam' | head -n 1)")
+          if [ -z "$APP_DIR" ] || [ "$APP_DIR" = "." ]; then
+            echo "app_dir=." >> "$GITHUB_OUTPUT"
+          else
+            echo "app_dir=$APP_DIR" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Found application.fam in: $APP_DIR"
+
       - name: Build application
+        working-directory: ${{ steps.find_app.outputs.app_dir }}
         run: ufbt
 
       - name: Upload built .fap as artifact
         uses: actions/upload-artifact@v4
         with:
           name: multi_rfid-fap
-          path: dist/*.fap
+          path: ${{ steps.find_app.outputs.app_dir }}/dist/*.fap
           if-no-files-found: error
