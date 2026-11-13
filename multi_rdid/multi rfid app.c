@@ -1,9 +1,10 @@
 /*
  * Multi RFID Switcher
  * ---------------------------------------------------------
- * Показывает список сохранённых LF RFID карт (/ext/lfrfid/*.rfid)
- * и позволяет переключаться между ними и эмулировать выбранную
- * нажатием кнопки OK. Кнопка "Назад" возвращает к списку.
+ * Показывает список сохранённых LF RFID карт (папка /ext/lfrfid,
+ * файлы с расширением .rfid) и позволяет переключаться между
+ * ними и эмулировать выбранную нажатием кнопки OK. Кнопка "Назад"
+ * возвращает к списку.
  *
  * Собирается как обычное внешнее приложение (.fap) через
  * ufbt (micro Flipper Build Tool).
@@ -16,9 +17,9 @@
 #include <gui/modules/submenu.h>
 #include <gui/modules/popup.h>
 #include <storage/storage.h>
+#include <toolbox/protocols/protocol_dict.h>
 #include <lfrfid/lfrfid_worker.h>
 #include <lfrfid/lfrfid_dict_file.h>
-#include <toolbox/path.h>
 
 #define TAG "MultiRFID"
 #define RFID_FOLDER "/ext/lfrfid"
@@ -42,13 +43,14 @@ typedef struct {
     Submenu* submenu;
     Popup* popup;
     Storage* storage;
+    ProtocolDict* dict;
     LFRFIDWorker* worker;
     CardList cards;
     int32_t selected_index;
     bool emulating;
 } MultiRfidApp;
 
-/* --- Сканируем папку /ext/lfrfid и собираем список карт --- */
+/* --- Сканируем папку RFID_FOLDER и собираем список карт --- */
 static void card_list_scan(MultiRfidApp* app) {
     CardList* list = &app->cards;
     list->count = 0;
@@ -64,14 +66,12 @@ static void card_list_scan(MultiRfidApp* app) {
             FuriString* fname = furi_string_alloc_set(name_buf);
             if(furi_string_end_with(fname, RFID_EXT)) {
                 // Имя без расширения — для отображения в меню
+                size_t cut = furi_string_size(fname) - strlen(RFID_EXT);
                 FuriString* display = furi_string_alloc_set(fname);
-                size_t ext_pos = furi_string_search_rstr(display, RFID_EXT);
-                if(ext_pos != FURI_STRING_FAILURE) {
-                    furi_string_left(display, ext_pos);
-                }
+                furi_string_left(display, cut);
 
-                FuriString* full_path = furi_string_alloc_printf(
-                    "%s/%s", RFID_FOLDER, furi_string_get_cstr(fname));
+                FuriString* full_path =
+                    furi_string_alloc_printf("%s/%s", RFID_FOLDER, furi_string_get_cstr(fname));
 
                 list->names[list->count] = display;
                 list->paths[list->count] = full_path;
@@ -108,35 +108,27 @@ static void start_emulation(MultiRfidApp* app, size_t index) {
     stop_emulation(app);
     if(index >= app->cards.count) return;
 
-    LFRFIDProtocol proto;
-    ProtocolDict* dict = protocol_dict_alloc(lfrfid_protocols, LFRFIDProtocolMax);
+    ProtocolId pid =
+        lfrfid_dict_file_load(app->dict, furi_string_get_cstr(app->cards.paths[index]));
 
-    if(!lfrfid_dict_file_load(dict, furi_string_get_cstr(app->cards.paths[index]))) {
+    if(pid == PROTOCOL_NO) {
         FURI_LOG_E(TAG, "Failed to load %s", furi_string_get_cstr(app->cards.paths[index]));
-        protocol_dict_free(dict);
         popup_set_header(app->popup, "Ошибка", 64, 10, AlignCenter, AlignTop);
-        popup_set_text(app->popup, "Не удалось прочитать файл карты", 64, 30, AlignCenter, AlignTop);
+        popup_set_text(
+            app->popup, "Не удалось прочитать файл карты", 64, 30, AlignCenter, AlignTop);
         view_dispatcher_switch_to_view(app->view_dispatcher, MultiRfidViewPopup);
         return;
     }
 
-    // Определяем протокол, записанный в файле, и запускаем эмуляцию им
-    proto = protocol_dict_get_protocol_by_file(dict, furi_string_get_cstr(app->cards.paths[index]));
-    (void)proto;
-
     lfrfid_worker_start_thread(app->worker);
-    lfrfid_worker_emulate_start(app->worker, proto);
+    lfrfid_worker_emulate_start(app->worker, pid);
     app->emulating = true;
     app->selected_index = index;
 
     popup_set_header(app->popup, "Эмуляция", 64, 10, AlignCenter, AlignTop);
     popup_set_text(
-        app->popup,
-        furi_string_get_cstr(app->cards.names[index]),
-        64, 30, AlignCenter, AlignTop);
+        app->popup, furi_string_get_cstr(app->cards.names[index]), 64, 30, AlignCenter, AlignTop);
     view_dispatcher_switch_to_view(app->view_dispatcher, MultiRfidViewPopup);
-
-    protocol_dict_free(dict);
 }
 
 /* --- Колбэк выбора пункта в меню --- */
@@ -145,18 +137,18 @@ static void submenu_callback(void* context, uint32_t index) {
     start_emulation(app, index);
 }
 
-/* --- Колбэк кнопки "Назад" из попапа эмуляции --- */
-static bool popup_back_callback(void* context) {
+/* --- Колбэк кнопки "Назад" из попапа эмуляции: останавливаем
+ *     эмуляцию и возвращаемся к списку карт --- */
+static uint32_t popup_back_callback(void* context) {
     MultiRfidApp* app = context;
     stop_emulation(app);
-    view_dispatcher_switch_to_view(app->view_dispatcher, MultiRfidViewSubmenu);
-    return true;
+    return MultiRfidViewSubmenu;
 }
 
-static bool submenu_back_callback(void* context) {
+/* --- Колбэк кнопки "Назад" из списка карт: выходим из приложения --- */
+static uint32_t submenu_back_callback(void* context) {
     UNUSED(context);
-    // Выход из приложения
-    return false;
+    return VIEW_NONE;
 }
 
 /* --- Инициализация приложения --- */
@@ -166,7 +158,9 @@ static MultiRfidApp* multi_rfid_app_alloc(void) {
 
     app->gui = furi_record_open(RECORD_GUI);
     app->storage = furi_record_open(RECORD_STORAGE);
-    app->worker = lfrfid_worker_alloc();
+
+    app->dict = protocol_dict_alloc(lfrfid_protocols, LFRFIDProtocolMax);
+    app->worker = lfrfid_worker_alloc(app->dict);
 
     app->view_dispatcher = view_dispatcher_alloc();
     view_dispatcher_attach_to_gui(app->view_dispatcher, app->gui, ViewDispatcherTypeFullscreen);
@@ -178,17 +172,14 @@ static MultiRfidApp* multi_rfid_app_alloc(void) {
         app->view_dispatcher, MultiRfidViewSubmenu, submenu_get_view(app->submenu));
 
     app->popup = popup_alloc();
-    view_set_previous_callback(popup_get_view(app->popup), (void*)popup_back_callback);
+    view_set_previous_callback(popup_get_view(app->popup), popup_back_callback);
+    view_set_context(popup_get_view(app->popup), app);
     view_dispatcher_add_view(app->view_dispatcher, MultiRfidViewPopup, popup_get_view(app->popup));
 
     card_list_scan(app);
     for(size_t i = 0; i < app->cards.count; i++) {
         submenu_add_item(
-            app->submenu,
-            furi_string_get_cstr(app->cards.names[i]),
-            i,
-            submenu_callback,
-            app);
+            app->submenu, furi_string_get_cstr(app->cards.names[i]), i, submenu_callback, app);
     }
 
     app->selected_index = -1;
@@ -200,6 +191,7 @@ static MultiRfidApp* multi_rfid_app_alloc(void) {
 static void multi_rfid_app_free(MultiRfidApp* app) {
     stop_emulation(app);
     lfrfid_worker_free(app->worker);
+    protocol_dict_free(app->dict);
 
     view_dispatcher_remove_view(app->view_dispatcher, MultiRfidViewSubmenu);
     view_dispatcher_remove_view(app->view_dispatcher, MultiRfidViewPopup);
@@ -224,7 +216,10 @@ int32_t multi_rfid_app(void* p) {
         popup_set_text(
             app->popup,
             "Сначала сохраните карты\nчерез 125kHz RFID -> Read -> Save",
-            64, 30, AlignCenter, AlignTop);
+            64,
+            30,
+            AlignCenter,
+            AlignTop);
         view_dispatcher_switch_to_view(app->view_dispatcher, MultiRfidViewPopup);
     } else {
         view_dispatcher_switch_to_view(app->view_dispatcher, MultiRfidViewSubmenu);
