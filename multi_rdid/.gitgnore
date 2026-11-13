@@ -1,0 +1,11 @@
+# ufbt build artifacts
+.ufbt/
+dist/
+build/
+*.o
+*.elf
+
+# OS / editor junk
+.DS_Store
+*.swp
+.vscode/
