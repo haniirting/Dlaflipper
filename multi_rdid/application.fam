@@ -1,0 +1,11 @@
+App(
+    appid="multi_rfid",
+    name="Multi RFID Switcher",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="multi_rfid_app",
+    stack_size=2 * 1024,
+    fap_category="Tools",
+    fap_version="1.0",
+    fap_icon="multi_rfid.png",
+    fap_description="Switch between saved LF RFID cards and emulate them",
+)
