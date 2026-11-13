@@ -1,0 +1,38 @@
+name: Build Flipper App
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build .fap
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ufbt
+        run: pip install ufbt
+
+      - name: Update ufbt SDK
+        run: ufbt update
+
+      - name: Build application
+        run: ufbt
+
+      - name: Upload built .fap as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: multi_rfid-fap
+          path: dist/*.fap
+          if-no-files-found: error
